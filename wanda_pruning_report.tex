@@ -1,0 +1,867 @@
+\documentclass[11pt,a4paper]{article}
+
+% ============================================
+% PACKAGES
+% ============================================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{subcaption}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{enumitem}
+\usepackage{natbib}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{listings}
+\usepackage{caption}
+
+% Page geometry
+\geometry{margin=1in}
+
+% Hyperref setup
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,      
+    urlcolor=cyan,
+    citecolor=blue,
+}
+
+% Header/Footer
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Wanda Pruning Experiment}
+\lhead{Course Project Report}
+\cfoot{\thepage}
+
+% Custom colors
+\definecolor{wandablue}{RGB}{52, 152, 219}
+\definecolor{magnitudred}{RGB}{231, 76, 60}
+\definecolor{densegreen}{RGB}{46, 204, 113}
+
+% ============================================
+% DOCUMENT START
+% ============================================
+\begin{document}
+
+% ============================================
+% TITLE PAGE
+% ============================================
+\begin{titlepage}
+    \centering
+    \vspace*{1cm}
+    
+    {\scshape\LARGE Mohammed VI Polytechnic University \par}
+    \vspace{0.5cm}
+    {\scshape\Large College of Computing \par}
+    \vspace{1.5cm}
+    
+    \rule{\linewidth}{0.5mm} \\[0.4cm]
+    {\huge\bfseries Wanda: A Simple and Effective Pruning Approach for Large Language Models \par}
+    \vspace{0.2cm}
+    {\Large\itshape Reproducing Unstructured Pruning Experiments \par}
+    \rule{\linewidth}{0.5mm} \\[1.5cm]
+    
+    \vspace{1cm}
+    
+    {\Large\textbf{AI Course Project} \par}
+    \vspace{0.5cm}
+    {\large CSCI-B-M315 - Advanced AI Topics -- 2025/2026 \par}
+    
+    \vspace{2cm}
+    
+    \begin{minipage}{0.45\textwidth}
+        \begin{flushleft}
+            \large\textbf{Authors:}\\
+            Zineb ABERCHA \\
+            Omar Alfarouq BOUHADI
+        \end{flushleft}
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.45\textwidth}
+        \begin{flushright}
+            \large\textbf{Supervised by:}\\
+            Prof. Hamza KEURTI \\
+            \vspace{0.5cm}
+        \end{flushright}
+    \end{minipage}
+    
+    \vfill
+    
+    {\large January 2026 \par}
+\end{titlepage}
+
+% ============================================
+% ABSTRACT
+% ============================================
+\begin{abstract}
+Large Language Models (LLMs) perform well across many natural language processing tasks, but their billions of parameters make deployment difficult. This report reproduces and validates the Wanda (Weights AND Activations) pruning technique proposed by Sun et al. (2024), testing its effectiveness for unstructured pruning on LLMs. We ran experiments on LLaMA-2-7B and LLaMA-3.1-8B, measuring performance at three sparsity levels (30\%, 50\%, and 70\%) using perplexity on WikiText-2 and zero-shot accuracy on five benchmark tasks. Our results show that Wanda outperforms magnitude-based pruning in most cases, with large improvements at 50\% sparsity: 45.8\% lower perplexity for LLaMA-2-7B and 76.2\% lower perplexity for LLaMA-3.1-8B compared to magnitude pruning. We also discuss what happens at extreme sparsity levels and explain why activation-aware pruning works better than using weight magnitude alone.
+\end{abstract}
+
+\newpage
+\tableofcontents
+\newpage
+
+% ============================================
+% SECTION 1: INTRODUCTION
+% ============================================
+\section{Introduction}
+
+\subsection{Motivation}
+
+The emergence of Large Language Models (LLMs) such as GPT-4, LLaMA, and Claude has changed how we approach natural language processing. These models can generate text, reason through problems, and complete various tasks. However, they typically contain billions of parameters, which means they need a lot of computational power to run. For example, the LLaMA-2-7B model has about 6.7 billion parameters and needs at least 14GB of GPU memory just to load it in half-precision format.
+
+This high resource requirement makes it hard to deploy these models on edge devices, mobile phones, or in situations where cloud computing costs matter. As a result, techniques for making models smaller (like quantization, knowledge distillation, and pruning) have become important for practical use.
+
+\subsection{The Pruning Challenge}
+
+Neural network pruning aims to remove redundant parameters while preserving model accuracy. Traditional approaches include:
+
+\begin{itemize}
+    \item \textbf{Magnitude Pruning}: Removes weights with the smallest absolute values, assuming small weights contribute less to model output.
+    \item \textbf{Gradient-based Pruning}: Uses gradient information to identify important weights.
+    \item \textbf{Second-order Methods}: Leverage Hessian information to estimate weight importance (e.g., OBS, OBD).
+\end{itemize}
+
+While magnitude pruning is simple and computationally efficient, it suffers from a fundamental limitation: \textbf{weight magnitude alone does not determine importance}. A small weight connected to highly activated inputs may contribute more to the model's output than a large weight connected to rarely-activated inputs.
+
+\subsection{Contributions of This Work}
+
+In this project, we reproduce and validate the Wanda pruning method~\citep{sun2024wanda}, which addresses the limitations of magnitude pruning by incorporating input activation statistics. Our specific contributions include:
+
+\begin{enumerate}
+    \item Implementation of both Wanda and magnitude pruning algorithms for LLaMA-family models.
+    \item Comprehensive evaluation on LLaMA-2-7B and LLaMA-3.1-8B across three sparsity levels.
+    \item Analysis of perplexity degradation on WikiText-2 and zero-shot accuracy on five benchmark tasks.
+    \item Discussion of failure modes at extreme sparsity and limitations of unstructured pruning.
+\end{enumerate}
+
+% ============================================
+% SECTION 2: BACKGROUND AND RELATED WORK
+% ============================================
+\section{Background and Related Work}
+
+\subsection{Large Language Model Architecture}
+
+Modern LLMs are predominantly based on the Transformer architecture~\citep{vaswani2017attention}, consisting of stacked decoder layers. Each layer contains:
+
+\begin{itemize}
+    \item \textbf{Multi-Head Self-Attention}: Computes attention weights across input tokens.
+    \item \textbf{Feed-Forward Network (FFN)}: Two linear transformations with a non-linear activation.
+    \item \textbf{Layer Normalization}: Stabilizes training and inference.
+\end{itemize}
+
+The LLaMA model family~\citep{touvron2023llama, touvron2023llama2} uses the following architectural choices:
+\begin{itemize}
+    \item Pre-normalization using RMSNorm instead of LayerNorm
+    \item SwiGLU activation function in the FFN
+    \item Rotary Position Embeddings (RoPE)
+    \item No bias terms in linear layers
+\end{itemize}
+
+\subsection{Neural Network Pruning}
+
+Pruning techniques can be categorized along several dimensions:
+
+\subsubsection{Structured vs. Unstructured Pruning}
+
+\begin{itemize}
+    \item \textbf{Structured Pruning}: Removes entire neurons, channels, or attention heads. Results in directly smaller weight matrices that can be accelerated on standard hardware.
+    \item \textbf{Unstructured Pruning}: Removes individual weights, creating sparse weight matrices. Achieves higher sparsity at equivalent accuracy but requires specialized hardware or sparse kernels for acceleration.
+\end{itemize}
+
+This work focuses on \textbf{unstructured pruning}, following the Wanda paper's experimental setup.
+
+\subsubsection{Pruning Metrics}
+
+The choice of importance metric determines which weights are removed:
+
+\begin{equation}
+    S_{\text{magnitude}}(w_{ij}) = |w_{ij}|
+\end{equation}
+
+\begin{equation}
+    S_{\text{Wanda}}(w_{ij}) = |w_{ij}| \cdot \|X_j\|_2
+\end{equation}
+
+where $w_{ij}$ is the weight connecting input $j$ to output $i$, and $X_j$ represents the $j$-th input feature across calibration samples.
+
+\subsection{The Wanda Method}
+
+Sun et al.~\citep{sun2024wanda} proposed Wanda (Weights AND Activations), observing that:
+
+\begin{enumerate}
+    \item LLMs exhibit emergent large-magnitude features in hidden states.
+    \item These features cause certain input channels to have significantly higher activation norms.
+    \item Weights connected to these high-activation channels are more important, regardless of their magnitude.
+\end{enumerate}
+
+The key insight is that the importance of a weight should be measured by its potential contribution to the output, not just its magnitude:
+
+\begin{equation}
+    \text{Output contribution} \propto |w_{ij}| \times \text{(how often input } j \text{ is activated)}
+\end{equation}
+
+Wanda requires only a small calibration set (typically 128 samples) to compute activation statistics, making it a highly efficient one-shot pruning method that requires no retraining.
+
+\subsection{Related Methods}
+
+\begin{itemize}
+    \item \textbf{SparseGPT}~\citep{frantar2023sparsegpt}: Uses approximate second-order information with similar accuracy but higher computational cost.
+    \item \textbf{GPTQ}~\citep{frantar2022gptq}: Quantization method using similar calibration approach.
+    \item \textbf{LLM-Pruner}~\citep{ma2023llmpruner}: Structured pruning approach for LLMs.
+\end{itemize}
+
+% ============================================
+% SECTION 3: METHODOLOGY
+% ============================================
+\section{Methodology}
+
+\subsection{Pruning Algorithm}
+
+Our implementation follows the Wanda algorithm as described in Algorithm~\ref{alg:wanda}.
+
+\begin{algorithm}[H]
+\caption{Wanda Pruning Algorithm}
+\label{alg:wanda}
+\begin{algorithmic}[1]
+\Require Model $\mathcal{M}$, Calibration data $\mathcal{D}$, Target sparsity $s$
+\Ensure Pruned model $\mathcal{M}'$
+\State \textbf{Phase 1: Capture layer inputs}
+\For{each layer $l$ in $\mathcal{M}$}
+    \State Attach hook to capture input activations
+\EndFor
+\State Forward pass calibration samples through $\mathcal{M}$
+\State \textbf{Phase 2: Layer-wise pruning}
+\For{each layer $l$ in $\mathcal{M}$}
+    \For{each linear sublayer $L$ in layer $l$}
+        \State $X \gets$ captured inputs to $L$ across all samples
+        \State $\text{norms}_j \gets \sqrt{\sum_{\text{samples}} X_j^2}$ for each input channel $j$
+        \State $W \gets$ weight matrix of $L$
+        \State $S_{ij} \gets |W_{ij}| \times \text{norms}_j$ \Comment{Wanda importance score}
+        \State $\text{threshold} \gets$ $s$-th percentile of $S$ per row
+        \State $W_{ij} \gets 0$ where $S_{ij} < \text{threshold}$
+    \EndFor
+    \State Forward layer $l$ to update inputs for next layer
+\EndFor
+\State \Return $\mathcal{M}'$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Implementation Details}
+
+Our implementation incorporates the following design choices:
+
+\begin{enumerate}
+    \item \textbf{Layer-by-layer processing}: Activations are propagated through each pruned layer before processing the next, ensuring accurate activation statistics.
+    
+    \item \textbf{Per-row sparsity}: Sparsity is applied uniformly across each row of the weight matrix, ensuring balanced capacity reduction.
+    
+    \item \textbf{Stable sorting}: We use PyTorch's stable sort to ensure deterministic pruning decisions when weights have equal importance scores.
+    
+    \item \textbf{Numerical stability}: A small epsilon ($10^{-6}$) is added before taking square roots to prevent numerical issues.
+\end{enumerate}
+
+\subsection{Baseline: Magnitude Pruning}
+
+For comparison, we implement standard magnitude pruning:
+
+\begin{equation}
+    S_{\text{magnitude}}(w_{ij}) = |w_{ij}|
+\end{equation}
+
+The same per-row sparsity allocation and layer-by-layer processing are applied for fair comparison.
+
+\subsection{Evaluation Metrics}
+
+\subsubsection{Perplexity}
+
+Perplexity measures how well the model predicts a held-out test set:
+
+\begin{equation}
+    \text{PPL} = \exp\left(-\frac{1}{N}\sum_{i=1}^{N}\log P(x_i|x_{<i})\right)
+\end{equation}
+
+Lower perplexity indicates better language modeling capability. We evaluate on the WikiText-2 test set.
+
+\subsubsection{Zero-Shot Accuracy}
+
+We evaluate zero-shot performance on five benchmark tasks using the LM Evaluation Harness~\citep{eval-harness}:
+
+\begin{itemize}
+    \item \textbf{PIQA}~\citep{bisk2020piqa}: Physical intuition QA
+    \item \textbf{HellaSwag}~\citep{zellers2019hellaswag}: Commonsense natural language inference
+    \item \textbf{ARC-Easy}~\citep{clark2018arc}: Science question answering
+    \item \textbf{BoolQ}~\citep{clark2019boolq}: Boolean question answering
+    \item \textbf{RTE}~\citep{dagan2005pascal}: Recognizing textual entailment
+\end{itemize}
+
+% ============================================
+% SECTION 4: EXPERIMENTAL SETUP
+% ============================================
+\section{Experimental Setup}
+
+\subsection{Models}
+
+We evaluate two models from the LLaMA family:
+
+\begin{table}[H]
+\centering
+\caption{Model specifications}
+\label{tab:models}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{Parameters} & \textbf{Layers} & \textbf{Hidden Size} & \textbf{Vocabulary} \\
+\midrule
+LLaMA-2-7B & 6,738,415,616 & 32 & 4,096 & 32,000 \\
+LLaMA-3.1-8B & 8,030,261,248 & 32 & 4,096 & 128,256 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Dataset and Calibration}
+
+\begin{itemize}
+    \item \textbf{Calibration Set}: 64 random sequences from WikiText-2 training split
+    \item \textbf{Sequence Length}: 4,096 tokens
+    \item \textbf{Evaluation}: WikiText-2 test split for perplexity
+\end{itemize}
+
+\subsection{Sparsity Levels}
+
+We evaluate three sparsity ratios representing conservative, moderate, and aggressive pruning:
+
+\begin{itemize}
+    \item \textbf{30\% Sparsity}: Conservative pruning, minimal accuracy loss expected
+    \item \textbf{50\% Sparsity}: Moderate pruning, half of parameters removed
+    \item \textbf{70\% Sparsity}: Aggressive pruning, stress-testing model resilience
+\end{itemize}
+
+\subsection{Hardware and Software}
+
+\begin{table}[H]
+\centering
+\caption{Experimental environment}
+\label{tab:environment}
+\begin{tabular}{ll}
+\toprule
+\textbf{Component} & \textbf{Specification} \\
+\midrule
+Platform & Lightning.ai \\
+GPU & NVIDIA L40S (48GB VRAM) \\
+CUDA Version & 12.6 \\
+PyTorch Version & 2.8.0 \\
+Transformers & 4.57.3 \\
+LM Evaluation Harness & 0.4.9 \\
+Precision & FP16 \\
+Random Seed & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================
+% SECTION 5: RESULTS
+% ============================================
+\section{Results}
+
+\subsection{Perplexity Evaluation}
+
+Table~\ref{tab:perplexity} presents the perplexity results on WikiText-2 for both models across all sparsity levels.
+
+\begin{table}[H]
+\centering
+\caption{Perplexity on WikiText-2 (lower is better). Wanda improvement shows the relative reduction in perplexity compared to magnitude pruning.}
+\label{tab:perplexity}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Model} & \textbf{Method} & \textbf{Perplexity} & \textbf{$\Delta$ from Dense} & \textbf{Wanda Improvement} \\
+\midrule
+\multirow{7}{*}{LLaMA-2-7B} 
+    & Dense (Baseline) & 5.11 & -- & -- \\
+
+    & Magnitude 30\% & 5.74 & +12.1\% & \multirow{2}{*}{3.7\%} \\
+    & Wanda 30\% & 5.52 & +8.0\% & \\
+    & Magnitude 50\% & 11.83 & +131.4\% & \multirow{2}{*}{\textbf{45.8\%}} \\
+    & Wanda 50\% & 6.42 & +25.5\% & \\
+    & Magnitude 70\% & $\infty$\textsuperscript{*} & -- & \multirow{2}{*}{--} \\
+
+    & Wanda 70\% & 68.80 & +1245.4\% & \\
+\midrule
+\multirow{7}{*}{LLaMA-3.1-8B} 
+    & Dense (Baseline) & 5.85 & -- & -- \\
+
+    & Magnitude 30\% & 8.50 & +45.4\% & \multirow{2}{*}{25.7\%} \\
+    & Wanda 30\% & 6.32 & +8.1\% & \\
+    & Magnitude 50\% & 37.82 & +546.8\% & \multirow{2}{*}{\textbf{76.2\%}} \\
+    & Wanda 50\% & 9.00 & +53.8\% & \\
+    & Magnitude 70\% & 263,197.6 & -- & \multirow{2}{*}{99.96\%} \\
+
+    & Wanda 70\% & 96.75 & +1554.3\% & \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\small
+\item \textsuperscript{*} NaN value due to numerical overflow. The model produces undefined outputs at this sparsity level because too many important weights were removed.
+\end{tablenotes}
+\end{table}
+
+\begin{enumerate}
+    \item \textbf{Wanda beats magnitude pruning} at all sparsity levels for perplexity (though at 30\% sparsity for LLaMA-2, zero-shot accuracy is nearly identical).
+    
+    \item \textbf{The advantage grows with sparsity}: At 30\% sparsity, improvements are modest (3.7\% to 25.7\%), but at 50\% sparsity, Wanda delivers large improvements (45.8\% to 76.2\%).
+    
+    \item \textbf{LLaMA-3.1-8B breaks down faster with magnitude pruning}: At 50\% sparsity, magnitude pruning increases perplexity by 546.8\% for LLaMA-3 versus 131.4\% for LLaMA-2. This suggests LLaMA-3 uses its parameters more efficiently, so removing them without considering activations hurts more.
+    
+    \item \textbf{70\% sparsity is too aggressive} for both methods. However, Wanda still produces valid outputs while magnitude pruning on LLaMA-2 produces NaN (numerical overflow).
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.48\textwidth]{results_llama2/1_perplexity_comparison.png}
+    \includegraphics[width=0.48\textwidth]{results_llama3/1_perplexity_comparison.png}
+    \caption{Perplexity comparison across methods and sparsity levels for LLaMA-2-7B (left) and LLaMA-3.1-8B (right). Note: The LLaMA-3 plot shows an extreme bar for magnitude pruning at 70\% sparsity (perplexity = 263,197). This value is so large that it dwarfs all other bars, making them appear flat in comparison.}
+    \label{fig:perplexity}
+\end{figure}
+
+\textbf{Note on extreme perplexity values:} At 70\% sparsity, magnitude pruning causes catastrophic model failure on both models. For LLaMA-2-7B, the perplexity returned NaN (undefined) due to numerical overflow. For LLaMA-3.1-8B, the perplexity reached 263,197, which means the model is essentially outputting random tokens. A perplexity this high indicates the model has lost nearly all language understanding. For context, a random baseline on WikiText-2 would have a perplexity around 50,000 (roughly the vocabulary size). The fact that magnitude pruning produces worse-than-random results shows that removing 70\% of weights based only on magnitude destroys critical computational pathways. In contrast, Wanda at 70\% sparsity still produces perplexity values of 68.8 (LLaMA-2) and 96.7 (LLaMA-3), which are poor but still represent coherent language modeling.
+
+\subsection{Zero-Shot Accuracy}
+
+Table~\ref{tab:zeroshot} presents the average zero-shot accuracy across five benchmark tasks.
+
+\begin{table}[H]
+\centering
+\caption{Average zero-shot accuracy across five tasks (higher is better).}
+\label{tab:zeroshot}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Model} & \textbf{Method} & \textbf{Accuracy (\%)} & \textbf{Retention} & \textbf{Wanda $\Delta$} \\
+\midrule
+\multirow{7}{*}{LLaMA-2-7B} 
+    & Dense (Baseline) & 70.78 & 100.0\% & -- \\
+
+    & Magnitude 30\% & 69.09 & 97.6\% & \multirow{2}{*}{$-$0.01 pp} \\
+    & Wanda 30\% & 69.08 & 97.6\% & \\
+    & Magnitude 50\% & 62.26 & 88.0\% & \multirow{2}{*}{\textbf{+3.95 pp}} \\
+    & Wanda 50\% & 66.21 & 93.5\% & \\
+    & Magnitude 70\% & 38.82 & 54.9\% & \multirow{2}{*}{+3.46 pp} \\
+    & Wanda 70\% & 42.28 & 59.7\% & \\
+\midrule
+\multirow{7}{*}{LLaMA-3.1-8B} 
+    & Dense (Baseline) & 75.27 & 100.0\% & -- \\
+
+    & Magnitude 30\% & 71.74 & 95.3\% & \multirow{2}{*}{\textbf{+2.76 pp}} \\
+    & Wanda 30\% & 74.49 & 99.0\% & \\
+    & Magnitude 50\% & 56.43 & 75.0\% & \multirow{2}{*}{\textbf{+9.63 pp}} \\
+    & Wanda 50\% & 66.05 & 87.8\% & \\
+    & Magnitude 70\% & 40.28 & 53.5\% & \multirow{2}{*}{+2.14 pp} \\
+    & Wanda 70\% & 42.42 & 56.4\% & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.48\textwidth]{results_llama2/3_zero_shot_summary.png}
+    \includegraphics[width=0.48\textwidth]{results_llama3/3_zero_shot_summary.png}
+    \caption{Zero-shot accuracy summary for LLaMA-2-7B (left) and LLaMA-3.1-8B (right).}
+    \label{fig:zeroshot}
+\end{figure}
+
+\subsection{Per-Task Breakdown}
+
+Table~\ref{tab:pertask} provides detailed per-task accuracy at 50\% sparsity, where Wanda's advantage is most pronounced.
+
+\begin{table}[H]
+\centering
+\caption{Per-task zero-shot accuracy at 50\% sparsity (\%).}
+\label{tab:pertask}
+\begin{tabular}{llccccc}
+\toprule
+\textbf{Model} & \textbf{Method} & \textbf{PIQA} & \textbf{HellaSwag} & \textbf{ARC-Easy} & \textbf{BoolQ} & \textbf{RTE} \\
+\midrule
+\multirow{3}{*}{LLaMA-2-7B} 
+    & Dense & 78.13 & 57.10 & 75.46 & 79.33 & 63.90 \\
+    & Magnitude & 74.59 & 53.09 & 67.85 & 63.43 & 52.35 \\
+    & Wanda & 76.06 & 51.82 & 72.56 & 76.09 & 54.51 \\
+\midrule
+\multirow{3}{*}{LLaMA-3.1-8B} 
+    & Dense & 79.27 & 60.67 & 82.20 & 83.09 & 71.12 \\
+    & Magnitude & 70.46 & 43.27 & 62.21 & 52.42 & 53.79 \\
+    & Wanda & 73.88 & 50.53 & 71.84 & 79.14 & 54.87 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.48\textwidth]{results_llama2/4_task_breakdown_50.png}
+    \includegraphics[width=0.48\textwidth]{results_llama3/4_task_breakdown_50.png}
+    \caption{Per-task breakdown at 50\% sparsity for LLaMA-2-7B (left) and LLaMA-3.1-8B (right).}
+    \label{fig:pertask}
+\end{figure}
+
+\subsubsection{Task-Specific Observations}
+
+\begin{itemize}
+    \item \textbf{BoolQ shows the largest improvement}: Wanda preserves 96\% of dense accuracy versus 80\% for magnitude pruning on LLaMA-2-7B at 50\% sparsity (+12.66 percentage points).
+    
+    \item \textbf{HellaSwag is consistently challenging}: Both methods show significant drops, suggesting commonsense reasoning relies on distributed knowledge that is sensitive to pruning.
+    
+    \item \textbf{PIQA (physical reasoning) is most robust}: Both methods retain $>$90\% of baseline at 50\% sparsity.
+\end{itemize}
+
+\subsection{Performance Degradation Analysis}
+
+Figure~\ref{fig:degradation} visualizes the relative performance degradation as sparsity increases.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.48\textwidth]{results_llama2/2_degradation.png}
+    \includegraphics[width=0.48\textwidth]{results_llama3/2_degradation.png}
+    \caption{Perplexity increase relative to dense baseline for LLaMA-2-7B (left) and LLaMA-3.1-8B (right). Wanda consistently shows lower degradation.}
+    \label{fig:degradation}
+\end{figure}
+
+\subsection{Accuracy Retention}
+
+Figure~\ref{fig:retention} shows the percentage of original zero-shot accuracy retained at each sparsity level.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.48\textwidth]{results_llama2/7_accuracy_retention.png}
+    \includegraphics[width=0.48\textwidth]{results_llama3/7_accuracy_retention.png}
+    \caption{Zero-shot accuracy retention relative to dense baseline.}
+    \label{fig:retention}
+\end{figure}
+
+\subsection{Computational Timing}
+
+Table~\ref{tab:timing} presents the execution time for key operations.
+
+\begin{table}[H]
+\centering
+\caption{Execution time in seconds for LLaMA-2-7B.}
+\label{tab:timing}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Operation} & \textbf{Magnitude} & \textbf{Wanda} \\
+\midrule
+Model Loading & \multicolumn{2}{c}{53.7s} \\
+Pruning (30\%) & 29.2s & 59.3s \\
+Pruning (50\%) & 28.4s & 58.6s \\
+Pruning (70\%) & 27.4s & 57.3s \\
+Perplexity Evaluation & \multicolumn{2}{c}{$\sim$32s} \\
+Zero-Shot Evaluation & \multicolumn{2}{c}{$\sim$530s} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Wanda pruning takes approximately 2$\times$ longer than magnitude pruning due to the additional forward passes required to compute activation statistics. However, this is a one-time cost that yields significant accuracy improvements.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{results_llama2/8_timing_breakdown.png}
+    \caption{Timing breakdown for LLaMA-2-7B experiments.}
+    \label{fig:timing}
+\end{figure}
+
+% ============================================
+% SECTION 6: DISCUSSION
+% ============================================
+\section{Discussion}
+
+\subsection{Why Wanda Outperforms Magnitude Pruning}
+
+The fundamental insight of Wanda is that \textbf{weight importance is context-dependent}. Consider two weights:
+
+\begin{itemize}
+    \item \textbf{Weight A}: Large magnitude ($|w| = 0.5$), but connected to a rarely-activated input channel.
+    \item \textbf{Weight B}: Medium magnitude ($|w| = 0.3$), but connected to a frequently-activated input channel.
+\end{itemize}
+
+Magnitude pruning would preserve Weight A and remove Weight B. However, Weight B contributes more to the model's actual computations on real data. Wanda corrects this by computing:
+
+\begin{equation}
+    S_{\text{Wanda}}(A) = 0.5 \times \|X_{\text{low}}\|_2 < S_{\text{Wanda}}(B) = 0.3 \times \|X_{\text{high}}\|_2
+\end{equation}
+
+This explains why Wanda's advantage increases at higher sparsity levels: as more weights are removed, the cost of incorrect pruning decisions compounds, and magnitude pruning makes systematically worse decisions.
+
+\subsection{Analysis of the NaN Result}
+
+At 70\% sparsity with magnitude pruning on LLaMA-2-7B, the perplexity evaluation returned NaN (Not a Number). This occurs because:
+
+\begin{enumerate}
+    \item \textbf{Numerical overflow}: When 70\% of weights are removed based solely on magnitude, the model's output logits can become extremely large or small.
+    
+    \item \textbf{Loss of critical pathways}: Magnitude pruning may remove weights that are quantitatively small but qualitatively essential for maintaining stable forward propagation.
+    
+    \item \textbf{Accumulated errors}: Through 32 transformer layers, small numerical instabilities compound into undefined values.
+\end{enumerate}
+
+This result actually \textbf{highlights Wanda's advantage}: by considering activation patterns, Wanda preserves the weights that maintain numerical stability, producing coherent (if degraded) outputs even at 70\% sparsity where magnitude pruning completely fails.
+
+\subsection{The 30\% Sparsity Anomaly}
+
+At 30\% sparsity on LLaMA-2-7B, Wanda and magnitude pruning achieve nearly identical zero-shot accuracy (69.08\% vs 69.09\%), with magnitude marginally better. This can be explained by:
+
+\begin{enumerate}
+    \item \textbf{Low sparsity redundancy}: At 30\% sparsity, most important weights are preserved by both methods. The ``incorrectly'' pruned weights by magnitude pruning have minimal impact.
+    
+    \item \textbf{Statistical noise}: A difference of 0.01 percentage points is within measurement noise given the finite size of evaluation datasets.
+    
+    \item \textbf{Calibration distribution}: Wanda's advantage depends on calibration data (WikiText-2) accurately representing the activation patterns needed for downstream tasks.
+\end{enumerate}
+
+\subsection{Model Architecture Effects}
+
+LLaMA-3.1-8B shows greater sensitivity to magnitude pruning compared to LLaMA-2-7B:
+
+\begin{itemize}
+    \item At 30\% sparsity: LLaMA-3 perplexity increases 45.4\% vs 12.1\% for LLaMA-2
+    \item At 50\% sparsity: LLaMA-3 perplexity increases 546.8\% vs 131.4\% for LLaMA-2
+\end{itemize}
+
+This suggests that LLaMA-3's improved performance comes from more efficient parameter utilization, leaving less ``redundant'' capacity that can be safely pruned without activation awareness.
+
+\subsection{Failure Modes and Limitations}
+
+\subsubsection{High Sparsity Limits}
+
+Both methods show severe degradation beyond 70\% sparsity. This is a hard limit: removing 70\% of parameters leaves the model unable to do complex reasoning, no matter which weights you keep.
+
+\subsubsection{Task-Specific Degradation}
+
+Certain tasks (e.g., RTE, HellaSwag) show greater sensitivity to pruning than others (e.g., PIQA). Tasks requiring:
+\begin{itemize}
+    \item Complex multi-hop reasoning
+    \item Fine-grained semantic distinctions
+    \item Long-range dependencies
+\end{itemize}
+are more affected by parameter reduction.
+
+\subsubsection{Calibration Data Dependency}
+
+Wanda's effectiveness depends on calibration data representing the target distribution. If calibration data differs significantly from deployment scenarios (e.g., calibrating on Wikipedia text but deploying for code generation), performance gains may diminish.
+
+\subsubsection{Unstructured Sparsity Hardware Limitations}
+
+While unstructured pruning achieves higher accuracy at equivalent sparsity, it does not directly translate to inference speedups on standard hardware. Sparse matrix operations require:
+\begin{itemize}
+    \item Specialized CUDA kernels (e.g., cuSPARSE)
+    \item Hardware support (e.g., NVIDIA Ampere's structured sparsity)
+    \item Quantization-aware sparse formats
+\end{itemize}
+
+For practical deployment, structured pruning (e.g., 2:4 sparsity) may be preferable despite slightly lower accuracy.
+
+% ============================================
+% SECTION 7: CONCLUSION
+% ============================================
+\section{Conclusion}
+
+This project successfully reproduced the Wanda pruning method and validated its effectiveness against magnitude-based pruning on two state-of-the-art LLMs. Our key findings confirm the original paper's claims:
+
+\begin{enumerate}
+    \item \textbf{Wanda consistently outperforms magnitude pruning}, with improvements ranging from 3.7\% to 76.2\% in perplexity depending on model and sparsity level.
+    
+    \item \textbf{The advantage is most pronounced at moderate-to-high sparsity} (50\%), where Wanda delivers 45.8\% lower perplexity on LLaMA-2-7B and 76.2\% lower perplexity on LLaMA-3.1-8B.
+    
+    \item \textbf{Zero-shot accuracy improvements follow similar patterns}, with Wanda providing up to 9.63 percentage points higher accuracy at 50\% sparsity.
+    
+    \item \textbf{At extreme sparsity (70\%)}, Wanda maintains coherent outputs while magnitude pruning produces numerical failure, demonstrating superior preservation of model stability.
+\end{enumerate}
+
+The additional computational cost of Wanda (approximately 2$\times$ pruning time) is justified by the significant quality improvements, especially for deployment scenarios where model size is constrained.
+
+\subsection{Future Work}
+
+\begin{itemize}
+    \item Evaluate structured sparsity variants (2:4, 4:8) for hardware-accelerated inference
+    \item Combine Wanda with quantization for compound compression
+    \item Investigate task-specific calibration to improve downstream performance
+    \item Apply brief post-pruning fine-tuning to recover additional accuracy
+\end{itemize}
+
+% ============================================
+% REFERENCES
+% ============================================
+\newpage
+\bibliographystyle{plainnat}
+\begin{thebibliography}{20}
+
+\bibitem[Sun et al.(2024)]{sun2024wanda}
+Sun, M., Liu, Z., Bair, A., \& Kolter, J. Z. (2024).
+\newblock A Simple and Effective Pruning Approach for Large Language Models.
+\newblock In \emph{Proceedings of the International Conference on Learning Representations (ICLR)}.
+
+\bibitem[Touvron et al.(2023a)]{touvron2023llama}
+Touvron, H., Lavril, T., Izacard, G., Martinet, X., Lachaux, M.-A., Lacroix, T., ... \& Lample, G. (2023).
+\newblock LLaMA: Open and Efficient Foundation Language Models.
+\newblock \emph{arXiv preprint arXiv:2302.13971}.
+
+\bibitem[Touvron et al.(2023b)]{touvron2023llama2}
+Touvron, H., Martin, L., Stone, K., Albert, P., Almahairi, A., Babaei, Y., ... \& Scialom, T. (2023).
+\newblock Llama 2: Open Foundation and Fine-Tuned Chat Models.
+\newblock \emph{arXiv preprint arXiv:2307.09288}.
+
+\bibitem[Vaswani et al.(2017)]{vaswani2017attention}
+Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., ... \& Polosukhin, I. (2017).
+\newblock Attention is All You Need.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}.
+
+\bibitem[Frantar \& Alistarh(2023)]{frantar2023sparsegpt}
+Frantar, E., \& Alistarh, D. (2023).
+\newblock SparseGPT: Massive Language Models Can Be Accurately Pruned in One-Shot.
+\newblock In \emph{Proceedings of the International Conference on Machine Learning (ICML)}.
+
+\bibitem[Frantar et al.(2022)]{frantar2022gptq}
+Frantar, E., Ashkboos, S., Hoefler, T., \& Alistarh, D. (2022).
+\newblock GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers.
+\newblock \emph{arXiv preprint arXiv:2210.17323}.
+
+\bibitem[Ma et al.(2023)]{ma2023llmpruner}
+Ma, X., Fang, G., \& Wang, X. (2023).
+\newblock LLM-Pruner: On the Structural Pruning of Large Language Models.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}.
+
+\bibitem[Gao et al.(2023)]{eval-harness}
+Gao, L., Tow, J., Abbasi, B., Biderman, S., Black, S., DiPofi, A., ... \& Zou, A. (2023).
+\newblock A Framework for Few-shot Language Model Evaluation.
+\newblock \emph{Zenodo}. \url{https://doi.org/10.5281/zenodo.10256836}
+
+\bibitem[Bisk et al.(2020)]{bisk2020piqa}
+Bisk, Y., Zellers, R., Bras, R. L., Gao, J., \& Choi, Y. (2020).
+\newblock PIQA: Reasoning about Physical Commonsense in Natural Language.
+\newblock In \emph{Proceedings of AAAI}.
+
+\bibitem[Zellers et al.(2019)]{zellers2019hellaswag}
+Zellers, R., Holtzman, A., Bisk, Y., Farhadi, A., \& Choi, Y. (2019).
+\newblock HellaSwag: Can a Machine Really Finish Your Sentence?
+\newblock In \emph{Proceedings of ACL}.
+
+\bibitem[Clark et al.(2018)]{clark2018arc}
+Clark, P., Cowhey, I., Etzioni, O., Khot, T., Sabharwal, A., Schoenick, C., \& Tafjord, O. (2018).
+\newblock Think You Have Solved Question Answering? Try ARC, the AI2 Reasoning Challenge.
+\newblock \emph{arXiv preprint arXiv:1803.05457}.
+
+\bibitem[Clark et al.(2019)]{clark2019boolq}
+Clark, C., Lee, K., Chang, M.-W., Kwiatkowski, T., Collins, M., \& Toutanova, K. (2019).
+\newblock BoolQ: Exploring the Surprising Difficulty of Natural Yes/No Questions.
+\newblock In \emph{Proceedings of NAACL}.
+
+\bibitem[Dagan et al.(2005)]{dagan2005pascal}
+Dagan, I., Glickman, O., \& Magnini, B. (2005).
+\newblock The PASCAL Recognising Textual Entailment Challenge.
+\newblock In \emph{Machine Learning Challenges Workshop}.
+
+\bibitem[Meta AI(2024)]{llama31}
+Meta AI. (2024).
+\newblock Llama 3.1 Model Card.
+\newblock \url{https://github.com/meta-llama/llama-models}
+
+\bibitem[Merity et al.(2016)]{wikitext}
+Merity, S., Xiong, C., Bradbury, J., \& Socher, R. (2016).
+\newblock Pointer Sentinel Mixture Models.
+\newblock \emph{arXiv preprint arXiv:1609.07843}.
+
+\end{thebibliography}
+
+% ============================================
+% APPENDIX
+% ============================================
+\newpage
+\appendix
+\section{Additional Visualizations}
+
+\subsection{Wanda vs. Magnitude Heatmap}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.48\textwidth]{results_llama2/6_wanda_vs_magnitude_heatmap.png}
+    \includegraphics[width=0.48\textwidth]{results_llama3/6_wanda_vs_magnitude_heatmap.png}
+    \caption{Perplexity comparison heatmap showing Wanda's improvement at each sparsity level.}
+    \label{fig:heatmap}
+\end{figure}
+
+\subsection{Per-Task Breakdown at 30\% and 70\% Sparsity}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.48\textwidth]{results_llama2/4_task_breakdown_30.png}
+    \includegraphics[width=0.48\textwidth]{results_llama2/4_task_breakdown_70.png}
+    \caption{Per-task breakdown for LLaMA-2-7B at 30\% (left) and 70\% (right) sparsity.}
+    \label{fig:pertask_llama2}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.48\textwidth]{results_llama3/4_task_breakdown_30.png}
+    \includegraphics[width=0.48\textwidth]{results_llama3/4_task_breakdown_70.png}
+    \caption{Per-task breakdown for LLaMA-3.1-8B at 30\% (left) and 70\% (right) sparsity.}
+    \label{fig:pertask_llama3}
+\end{figure}
+
+\section{Complete Results Tables}
+
+\subsection{LLaMA-2-7B Zero-Shot Results}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Complete zero-shot accuracy for LLaMA-2-7B (\%)}
+\begin{tabular}{lccccc|c}
+\toprule
+\textbf{Method} & \textbf{PIQA} & \textbf{HellaSwag} & \textbf{ARC-Easy} & \textbf{BoolQ} & \textbf{RTE} & \textbf{Average} \\
+\midrule
+Dense & 78.13 & 57.10 & 75.46 & 79.33 & 63.90 & 70.78 \\
+\midrule
+Magnitude 30\% & 78.40 & 58.13 & 75.97 & 75.20 & 57.76 & 69.09 \\
+Wanda 30\% & 78.02 & 56.56 & 75.59 & 78.56 & 56.68 & 69.08 \\
+\midrule
+Magnitude 50\% & 74.59 & 53.09 & 67.85 & 63.43 & 52.35 & 62.26 \\
+Wanda 50\% & 76.06 & 51.82 & 72.56 & 76.09 & 54.51 & 66.21 \\
+\midrule
+Magnitude 70\% & 52.77 & 25.87 & 25.63 & 37.86 & 51.99 & 38.82 \\
+Wanda 70\% & 54.24 & 27.89 & 29.55 & 47.03 & 52.71 & 42.28 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{LLaMA-3.1-8B Zero-Shot Results}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Complete zero-shot accuracy for LLaMA-3.1-8B (\%)}
+\begin{tabular}{lccccc|c}
+\toprule
+\textbf{Method} & \textbf{PIQA} & \textbf{HellaSwag} & \textbf{ARC-Easy} & \textbf{BoolQ} & \textbf{RTE} & \textbf{Average} \\
+\midrule
+Dense & 79.27 & 60.67 & 82.20 & 83.09 & 71.12 & 75.27 \\
+\midrule
+Magnitude 30\% & 76.61 & 56.37 & 78.37 & 80.18 & 67.15 & 71.74 \\
+Wanda 30\% & 78.35 & 59.55 & 80.51 & 82.94 & 71.12 & 74.49 \\
+\midrule
+Magnitude 50\% & 70.46 & 43.27 & 62.21 & 52.42 & 53.79 & 56.43 \\
+Wanda 50\% & 73.88 & 50.53 & 71.84 & 79.14 & 54.87 & 66.05 \\
+\midrule
+Magnitude 70\% & 54.73 & 26.44 & 29.71 & 37.83 & 52.71 & 40.28 \\
+Wanda 70\% & 55.17 & 27.48 & 32.32 & 44.43 & 52.71 & 42.42 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}

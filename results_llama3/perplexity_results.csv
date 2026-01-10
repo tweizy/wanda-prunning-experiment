@@ -1,0 +1,8 @@
+Model,Method,Perplexity
+Llama-3.1-8B,dense,5.846424579620361
+Llama-3.1-8B,magnitude_30,8.503436088562012
+Llama-3.1-8B,wanda_30,6.318479537963867
+Llama-3.1-8B,magnitude_50,37.821014404296875
+Llama-3.1-8B,wanda_50,8.996557235717773
+Llama-3.1-8B,magnitude_70,263197.625
+Llama-3.1-8B,wanda_70,96.74583435058594

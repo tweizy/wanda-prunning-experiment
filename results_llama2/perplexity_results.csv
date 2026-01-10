@@ -1,0 +1,8 @@
+Model,Method,Perplexity
+Llama-2-7b-hf,dense,5.114044666290283
+Llama-2-7b-hf,magnitude_30,5.735042572021484
+Llama-2-7b-hf,wanda_30,5.524386405944824
+Llama-2-7b-hf,magnitude_50,11.83237361907959
+Llama-2-7b-hf,wanda_50,6.415358066558838
+Llama-2-7b-hf,magnitude_70,
+Llama-2-7b-hf,wanda_70,68.80448150634766
